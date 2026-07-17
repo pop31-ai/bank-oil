@@ -83,18 +83,79 @@ class Contract:
     income: int = 0; expense: int = 0
 
 # -------------------------------------------------------------------
+# ГЕРОИ-РОБОТЫ (с прокачкой)
+# -------------------------------------------------------------------
+@dataclass
+class Hero:
+    name: str
+    title: str
+    desc: str
+    level: int = 1
+    xp: int = 0
+
+HEROES = [
+    Hero("Купец Гольдман",
+         "Торговый магнат",
+         "Сколотил состояние на табаке. Теперь скупает районы. "
+         "Бонус: -20K к покупке районов за каждый уровень."),
+    Hero("Кассир Сомов",
+         "Хранитель кассы",
+         "Верен банку 35 лет. Любит золотые часы и порядок. "
+         "Бонус: депозиты на 1% дешевле за уровень."),
+    Hero("Директор Ковалёва",
+         "Железная леди",
+         "Прошла путь от бухгалтера до директора. Никто не обманет. "
+         "Бонус: +1 действие за ход каждые 3 уровня."),
+    Hero("Риск-менеджер Лосев",
+         "Спасатель капиталов",
+         "Читает газеты. Носит простые часы. Предупреждает риски. "
+         "Бонус: нейтрализует одно плохое событие за раунд."),
+]
+
+def pick_hero():
+    return random.choice(HEROES)
+
+def xp_for_level(lv):
+    return lv * (lv + 1) * 3  # 6, 18, 36, 60, 90...
+
+def hero_bonus(hero):
+    lv = hero.level
+    if not hero:
+        return {}
+    return {
+        "district_discount": min(lv * 20, 100),       # -20K за уровень
+        "deposit_rate_cut": min(lv * 1, 10),          # -1% за уровень
+        "extra_action": (lv // 3) * 1,                 # +1 действие за 3 уровня
+        "oil_bonus_pct": min(lv * 5, 50),             # +5% нефть за уровень
+        "start_cash_bonus": min(lv * 10, 100),        # +10K стартовых
+    }
+
+def add_xp(p, amount, game):
+    if not p.hero: return
+    p.hero.xp += amount
+    while p.hero.xp >= xp_for_level(p.hero.level):
+        p.hero.xp -= xp_for_level(p.hero.level)
+        p.hero.level += 1
+        bonus = hero_bonus(p.hero)
+        print(f"  {C.MAGENTA}{p.name} -> УРОВЕНЬ {p.hero.level}! "
+              f"Скидка на районы: {bonus['district_discount']}K "
+              f"Действий: {3+bonus['extra_action']}{C.END}")
+
+# -------------------------------------------------------------------
 # ИГРОК
 # -------------------------------------------------------------------
 @dataclass
 class Player:
     name: str
+    is_ai: bool = False
     cash: int = 0; vault: bool = True; korchet: int = 0
     share_capital: int = 0; shares_issued: int = 0
-    districts: list = field(default_factory=list)   # ключи районов
+    districts: list = field(default_factory=list)
     contracts: list = field(default_factory=list)
     hand: list = field(default_factory=list)
     reputation: int = 100; bankrupt: bool = False
     profit: int = 0; total_profit: int = 0
+    hero: Hero = None
 
     @property
     def total_assets(self):
@@ -233,6 +294,7 @@ class Game:
     def setup(self):
         print(C.BOLD+C.WHITE+"\n"+ "#"*60+C.END)
         print(C.BOLD+C.GREEN+"   БАНКЪ & НЕФТЬ: ГОРОДСКАЯ АРХИТЕКТУРА"+C.END)
+        print(C.BOLD+C.CYAN+"   Теперь с AI-роботами!"+C.END)
         print(C.WHITE+"#"*60+C.END)
         n = 0
         while not (2 <= n <= 4):
@@ -240,20 +302,29 @@ class Game:
             except: pass
         for i in range(n):
             name = input(f"Имя игрока {i+1}: ").strip() or f"Игрок {i+1}"
-            p = Player(name=name)
-            shares = 0
-            while not (1 <= shares <= 5):
-                try: shares = int(input(f"  {p.name}, сколько акций? (1-5 по 100K): "))
-                except: pass
+            ai_q = input(f"  {name} — робот? (y/n, Enter=человек): ").strip().lower()
+            is_ai = ai_q in ("y","yes","д","да")
+            if is_ai:
+                h = pick_hero()
+                name += f" ({h.name})"
+            p = Player(name=name, is_ai=is_ai, hero=h if is_ai else None)
+            if is_ai:
+                shares = 3
+                print(f"  {name} покупает {shares} акций.")
+                print(f"  {C.MAGENTA}{h.title}: {h.desc}{C.END}")
+            else:
+                shares = 0
+                while not (1 <= shares <= 5):
+                    try: shares = int(input(f"  {p.name}, сколько акций? (1-5 по 100K): "))
+                    except: pass
             p.share_capital = shares * 100
             p.shares_issued = shares
             p.korchet = int(p.share_capital * 0.1)
             p.cash = p.share_capital - 50 - p.korchet
-            p.districts.append("fin")  # старт в Финансовом квартале
+            p.districts.append("fin")
             self.districts["fin"].owner = p
             self.players.append(p)
             print(f"  {C.GREEN}Хранилище собрано! Касса: {p.cash}K, Капитал: {p.capital}K{C.END}")
-        # стартовые карты
         for p in self.players:
             for _ in range(3):
                 if self.action_deck: p.hand.append(self.action_deck.pop())
@@ -293,16 +364,19 @@ class Game:
 
     def player_turn(self, p):
         if p.bankrupt: return
+        if p.is_ai:
+            self.ai_turn(p)
+            return
         print(C.BOLD+C.WHITE+f"\n{'='*60}"+C.END)
         print(C.BOLD+C.GREEN+f"  ХОД: {p.name}  | Раунд {self.round}/{self.max_rounds}"+C.END)
+        if p.hero:
+            print(f"  {C.CYAN}Герой: {p.hero.name} ({p.hero.title}) УРОВЕНЬ {p.hero.level}{C.END}")
         self.show_balance(p)
-        # событие
         input(C.BLACK+"Enter - тянуть событие из Мэрии..."+C.END)
         if self.event_deck:
             ev = self.event_deck.pop()
             print(f"{C.RED}СОБЫТИЕ (Мэрия): {ev.name}{C.END}")
             self.apply_event(p, ev)
-        # действия
         extra = 1 if p.has_district("osobnyak") else 0
         acts = 3 + extra
         while acts > 0:
@@ -312,7 +386,7 @@ class Game:
             print("3. Открыть филиал в районе (100K)")
             print("4. Выпустить акции (Биржа)")
             print("5. Выпустить вексель (Гостиный двор)")
-            print("6. Выпуск акций + карта города")
+            print("6. Карта города")
             print("7. Газета")
             print("8. Закончить ход")
             ch = input("Выбор: ").strip()
@@ -355,7 +429,6 @@ class Game:
                 self.show_news(p)
             elif ch == "8":
                 break
-        # расчёты
         self.do_accounts(p)
         if p.capital < 0:
             print(C.RED+f"\n  БАНКРОТСТВО! {p.name} выбывает (капитал {p.capital}K)."+C.END)
@@ -363,6 +436,106 @@ class Game:
         elif p.capital < p.share_capital // 2:
             print(f"  {C.RED}Капитал ниже 50% ({p.capital}K). Срочно нужна прибыль!{C.END}")
         input(C.BLACK+"Enter - передать ход..."+C.END)
+
+    def ai_turn(self, p):
+        if p.bankrupt: return
+        print(C.BOLD+C.MAGENTA+f"\n{'='*60}"+C.END)
+        print(C.BOLD+C.MAGENTA+f"  ХОД РОБОТА: {p.name}  | Раунд {self.round}/{self.max_rounds}"+C.END)
+        if p.hero:
+            bh = hero_bonus(p.hero)
+            print(f"  {C.CYAN}УРОВЕНЬ {p.hero.level} | XP {p.hero.xp}/{xp_for_level(p.hero.level)}{C.END}")
+        else:
+            bh = {}
+        # событие (Лосев может нейтрализовать)
+        if self.event_deck:
+            ev = self.event_deck.pop()
+            bad_events = {"Кризис","Инфляция","Кража","Пожар","Дефолт","Дефолт нефти",
+                          "Отток вкладчиков","Рецессия","Невозврат МБК","Санкции"}
+            if p.hero and p.hero.name == "Риск-менеджер Лосев" and ev.name in bad_events and p.hero.level >= 2:
+                print(f"  {C.MAGENTA}Лосев предотвратил: {ev.name}!{C.END}")
+            else:
+                print(f"{C.RED}СОБЫТИЕ: {ev.name}{C.END}")
+                self.apply_event(p, ev)
+        # решения AI с бонусами героя
+        extra_acts = bh.get("extra_action", 0)
+        acts = 3 + (1 if p.has_district("osobnyak") else 0) + extra_acts
+        for _ in range(acts):
+            acted = False
+            # 1) купить район + скидка героя
+            discount = bh.get("district_discount", 0)
+            if not acted:
+                for dk, d in self.districts.items():
+                    if d.owner or d.cost == 0: continue
+                    effective = max(d.cost - discount, 50)
+                    for myd in p.districts:
+                        if dk in self.districts[myd].adj and p.cash >= effective:
+                            p.cash -= effective
+                            p.districts.append(dk)
+                            d.owner = p
+                            print(f"  {C.MAGENTA}AI: купил {d.name} за {effective}K "
+                                  f"(скидка {discount}K){C.END}")
+                            acted = True; break
+                    if acted: break
+            # 2) открыть филиал
+            if not acted and p.cash >= 100:
+                for dk in p.districts:
+                    d = self.districts[dk]
+                    if not d.branch:
+                        p.cash -= 100; d.branch = True
+                        print(f"  {C.MAGENTA}AI: филиал в {d.name}{C.END}")
+                        acted = True
+                        break
+            # 3) сыграть карту из руки
+            if not acted and p.hand:
+                priority = {"neft":0,"credit":1,"deposit":2,"mejbank":3,"veksel":4,"akciya":5,"other":6}
+                p.hand.sort(key=lambda c: priority.get(c.ctype,9))
+                for card in p.hand[:]:
+                    if card.ctype == "neft" and p.cash >= 200:
+                        p.hand.remove(card)
+                        p.cash -= 200
+                        p.contracts.append(Contract(card.name,"neft",200,0,999,999,card.district,income=50))
+                        print(f"  {C.MAGENTA}AI: нефть {card.name}{C.END}")
+                        acted = True; break
+                    elif card.ctype == "credit":
+                        p.hand.remove(card)
+                        p.cash -= 100
+                        p.contracts.append(Contract(card.name,"credit",100,12,4,4,card.district,income=12))
+                        print(f"  {C.MAGENTA}AI: кредит {card.name}{C.END}")
+                        acted = True; break
+                    elif card.ctype == "deposit" and p.cash < 500:
+                        p.hand.remove(card)
+                        p.cash += 100
+                        p.contracts.append(Contract(card.name,"deposit",100,5,4,4,card.district,expense=5))
+                        print(f"  {C.MAGENTA}AI: депозит {card.name}{C.END}")
+                        acted = True; break
+                    elif card.ctype == "mejbank":
+                        p.hand.remove(card)
+                        p.cash += 150
+                        p.contracts.append(Contract(card.name,"credit",150,6,3,3,card.district,income=9))
+                        print(f"  {C.MAGENTA}AI: межбанк {card.name}{C.END}")
+                        acted = True; break
+            # 4) выпустить вексель если нужны деньги
+            if not acted and p.cash < 300:
+                p.cash += 100
+                p.contracts.append(Contract(f"Вексель AI","veksel_liability",100,10,3,3,"gostiny"))
+                print(f"  {C.MAGENTA}AI: выпустил вексель на 100K{C.END}")
+                acted = True
+            # 5) выпустить акции
+            if not acted:
+                p.share_capital += 200; p.shares_issued += 2
+                p.cash += 200
+                print(f"  {C.MAGENTA}AI: выпустил 2 акции, +200K{C.END}")
+                acted = True
+        self.do_accounts(p)
+        # XP за раунд
+        if p.hero:
+            add_xp(p, 2, self)  # за выживание
+            add_xp(p, p.profit // 100, self)  # за прибыль
+            add_xp(p, len(p.districts) - 1, self)  # за районы (кроме стартового)
+            add_xp(p, len(p.contracts) // 2, self)  # за контракты
+        if p.capital < 0:
+            print(C.RED+f"  AI {p.name} обанкротился!{C.END}")
+            p.bankrupt = True
 
     def buy_district(self, p):
         # показать доступные (смежные с владениями игрока)
@@ -616,6 +789,8 @@ class Game:
         for i,p in enumerate(res):
             st = C.GREEN if not p.bankrupt else C.RED
             print(f"\n  {i+1}. {st}{p.name}{C.END}")
+            if p.hero:
+                print(f"     Герой: {p.hero.name} (ур. {p.hero.level}, {p.hero.xp} XP)")
             print(f"     Капитал: {p.capital}K  |  Районов: {len(p.districts)}")
             print(f"     Акций: {p.shares_issued}  |  Репутация: {p.reputation}%")
             if p.bankrupt: print(f"     {C.RED}БАНКРОТ{C.END}")
