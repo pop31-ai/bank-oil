@@ -108,7 +108,7 @@ class Player:
 
     @property
     def total_liabilities(self):
-        l = self.share_capital
+        l = 0
         for c in self.contracts:
             if c.ctype in ('deposit','veksel_liability'): l += c.summa
         return l
@@ -358,8 +358,10 @@ class Game:
         # расчёты
         self.do_accounts(p)
         if p.capital < 0:
-            print(C.RED+f"\n  БАНКРОТСТВО! {p.name} выбывает."+C.END)
+            print(C.RED+f"\n  БАНКРОТСТВО! {p.name} выбывает (капитал {p.capital}K)."+C.END)
             p.bankrupt = True
+        elif p.capital < p.share_capital // 2:
+            print(f"  {C.RED}Капитал ниже 50% ({p.capital}K). Срочно нужна прибыль!{C.END}")
         input(C.BLACK+"Enter - передать ход..."+C.END)
 
     def buy_district(self, p):
@@ -414,14 +416,19 @@ class Game:
             print("  Нет такого района.")
 
     def show_balance(self, p):
+        assets = p.cash + p.korchet + (50 if p.vault else 0)
+        for c in p.contracts:
+            if c.ctype in ('credit','neft','veksel_asset'): assets += c.summa
+        liab = self.liab_sum(p)
         print(f"\n{C.CYAN}--- Баланс {p.name} ---{C.END}")
-        print(f"  Активы: касса {p.cash}K, корсчет {p.korchet}K, районы {len(p.districts)}")
+        print(f"  {C.GREEN}Активы:{C.END} касса {p.cash}K, корсчет {p.korchet}K, районы {len(p.districts)}")
         for c in p.contracts:
             if c.ctype in ('credit','neft','veksel_asset'):
-                print(f"    {c.name} ({c.ctype}) {c.summa}K")
-        print(f"  Пассивы: капитал {p.share_capital}K, обяз. {self.liab_sum(p)}K")
-        col = C.GREEN if p.capital >= 0 else C.RED
-        print(f"  {col}Капитал: {p.capital}K{C.END}")
+                print(f"    {c.name} +{c.summa}K")
+        print(f"  {C.RED}Пассивы:{C.END} обязат. {liab}K")
+        print(f"  Акционерный капитал: {p.share_capital}K")
+        col = C.GREEN if p.capital >= p.share_capital else C.YELLOW
+        print(f"  {col}ИТОГО КАПИТАЛ (с прибылью): {p.capital}K{C.END}")
 
     def liab_sum(self, p):
         return sum(c.summa for c in p.contracts if c.ctype in ('deposit','veksel_liability'))
@@ -549,9 +556,11 @@ class Game:
         for dk in p.districts:
             d = self.districts[dk]
             if d.branch: p.cash += 5; profit += 5
+        # Финансовый квартал дает +5K за раунд
+        if p.has_district("fin"): p.cash += 5; profit += 5
         # Вокзал
         if p.has_district("vokzal"): p.cash += 10; profit += 10
-        if p.vault: p.cash = max(0,p.cash-3); profit -= 3
+        if p.vault and self.round > 1: p.cash = max(0,p.cash-3); profit -= 3
         p.profit = profit; p.total_profit += profit
 
     def show_news(self, p):
@@ -609,7 +618,7 @@ class Game:
             print(f"\n  {i+1}. {st}{p.name}{C.END}")
             print(f"     Капитал: {p.capital}K  |  Районов: {len(p.districts)}")
             print(f"     Акций: {p.shares_issued}  |  Репутация: {p.reputation}%")
-            if p.bankrupt: print(f"     {C.Red}БАНКРОТ{C.END}")
+            if p.bankrupt: print(f"     {C.RED}БАНКРОТ{C.END}")
             for dk in p.districts:
                 d = self.districts[dk]
                 print(f"       {d.name} {'Ф' if d.branch else ''}")
